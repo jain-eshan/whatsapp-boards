@@ -2,6 +2,14 @@
 
 A WhatsApp number you capture to, and a web app where it actually lives.
 
+## Live
+
+- **App:** https://whatsapp-boards.vercel.app (auto-deploys on push to `main`)
+- **Repo:** https://github.com/jain-eshan/whatsapp-boards
+
+Database and web app are both provisioned and connected — see Status below for
+what's still stubbed on top of that foundation.
+
 ## Why the obvious version doesn't exist
 
 The obvious version of this product is: a bot that lives inside your WhatsApp
@@ -169,9 +177,36 @@ test number caps at 5 recipients — a real pilot needs a paid number with a
 phone that has never been registered on WhatsApp before, plus display-name
 review. Start that process before you need it; it takes days.
 
+**Supabase free-tier project cap is per-account, not per-org.** If
+`supabase projects create` fails with a "maximum limits for active free
+projects" error, creating a new org doesn't help — the 2-project free cap
+applies to every org where you're owner/admin, combined. Pause, delete, or
+upgrade an existing project (or upgrade the org to Pro) before retrying.
+
+**After running migrations, check the security advisor**
+(`supabase.com/dashboard/project/<ref>/advisors/security`, or the
+`get_advisors` MCP tool). `0003_security_hardening.sql` and
+`0004_fix_rls_auto_enable_grant.sql` exist because the first migration pass
+left two real findings: mutable `search_path` on the search RPC functions,
+and a dashboard-provisioned `rls_auto_enable()` helper that was callable via
+public RPC. The `rls_auto_enable` fix needed two attempts —
+`REVOKE ... FROM anon, authenticated` alone is a no-op, because Postgres
+grants `EXECUTE` to `PUBLIC` by default and those roles inherit through
+`PUBLIC` rather than holding an explicit grant. The advisor's other three
+findings (`dead_letter`/`ingest_log`/`magic_link_tokens` showing "RLS
+enabled, no policy") are intentional: those tables are service-role-only,
+so default-deny is correct, not a gap.
+
 ## Status
 
-This is a stub build, not a finished product. Concretely unfinished:
+Infrastructure is real: GitHub, Vercel (auto-deploy on push), and Supabase
+(schema applied, RLS on, security advisor clean apart from two accepted WARNs)
+are provisioned and wired together, confirmed working end to end — hitting
+`/api/search` in production returns a 401 from real auth logic reaching a real
+database, not a 500 from a missing connection.
+
+What runs on top of that foundation is a stub build, not a finished product.
+Concretely unfinished:
 
 - `src/lib/llm.ts`'s `embed()` needs a real BGE-M3 endpoint (self-hosted, or a
   provider serving `BAAI/bge-m3`).
@@ -184,6 +219,9 @@ This is a stub build, not a finished product. Concretely unfinished:
   to actually hold.
 - `/api/share`'s route contract is defined but doesn't persist yet.
 - Placeholder PWA icons (`public/icons/`) — swap before a real launch.
+- `OPENROUTER_API_KEY` and the Meta/WhatsApp Cloud API credentials aren't set
+  yet in production — nothing that calls out to either will work until they
+  are.
 
 See `/Users/eshan/.claude/plans/glistening-stirring-torvalds.md` for the full
 design doc this implements.
