@@ -4,9 +4,10 @@ import { markAsRead, sendText } from "@/lib/whatsapp";
 import { hybridSearch } from "@/lib/search";
 import { runCommand } from "@/lib/commands";
 import type { InboundTextMessage } from "@/lib/whatsapp";
+import type { CaptureFields } from "@/types/llm";
 
 const LOW_CONFIDENCE_THRESHOLD = 0.6;
-const DEFAULT_BOARD_SLUG = "inbox";
+export const DEFAULT_BOARD_SLUG = "inbox";
 
 /**
  * Processes one inbound WhatsApp text message end to end: idempotency check,
@@ -95,7 +96,7 @@ async function getOrCreateUser(db: ReturnType<typeof createServiceClient>, fromE
   return created;
 }
 
-async function getBoards(db: ReturnType<typeof createServiceClient>, userId: string) {
+export async function getBoards(db: ReturnType<typeof createServiceClient>, userId: string) {
   const { data, error } = await db
     .from("boards")
     .select("slug, name")
@@ -114,37 +115,58 @@ async function handleCapture(
   const capture = routed.capture;
   if (!capture) return;
 
+  const { boardName } = await persistCapture(db, user, boards, msg.text.body, capture, {
+    source: "whatsapp",
+    waMessageId: msg.id,
+  });
+
+  if (routed.confidence < LOW_CONFIDENCE_THRESHOLD) {
+    await sendText(
+      msg.from,
+      `Saved to "${boardName}" as "${capture.title}" — reply "undo" if that's wrong, or tell me the right board.`
+    );
+  } else {
+    await markAsRead(msg.id);
+  }
+}
+
+/**
+ * Shared persist step for every capture, regardless of where it came from
+ * (WhatsApp message or the PWA share target — see src/app/api/share/route.ts).
+ * Board resolution and embedding are identical either way; only the
+ * acknowledgment (WhatsApp read receipt vs. a redirect) differs per caller.
+ */
+export async function persistCapture(
+  db: ReturnType<typeof createServiceClient>,
+  user: { id: string },
+  boards: { slug: string; name: string }[],
+  rawText: string,
+  capture: CaptureFields,
+  opts: { source: string; waMessageId?: string }
+): Promise<{ id: string; boardName: string }> {
   const board = await getOrCreateBoard(db, user.id, capture.board, boards);
-  const vectors = await embed(msg.text.body).catch(() => null); // embeddings are best-effort at capture time
+  const vectors = await embed(rawText).catch(() => null); // embeddings are best-effort at capture time
 
   const { data: item, error } = await db
     .from("items")
     .insert({
       board_id: board.id,
       user_id: user.id,
-      raw_text: msg.text.body,
+      raw_text: rawText,
       parsed: capture,
       title: capture.title,
       due_at: capture.due_at,
       amount_minor: capture.amount_minor,
       currency: capture.currency,
-      wa_message_id: msg.id,
+      source: opts.source,
+      wa_message_id: opts.waMessageId ?? null,
       embedding: vectors?.dense ?? null,
     })
     .select("id")
     .single();
   if (error) throw error;
 
-  if (routed.confidence < LOW_CONFIDENCE_THRESHOLD) {
-    await sendText(
-      msg.from,
-      `Saved to "${board.name}" as "${capture.title}" — reply "undo" if that's wrong, or tell me the right board.`
-    );
-  } else {
-    await markAsRead(msg.id);
-  }
-
-  void item; // referenced for clarity; no further use here
+  return { id: item.id, boardName: board.name };
 }
 
 async function getOrCreateBoard(

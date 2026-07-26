@@ -217,7 +217,6 @@ Concretely unfinished:
 - Auth is a plain cookie naming a user id (`src/app/auth/verify/page.tsx`), not
   a real Supabase session — fine for a closed pilot, not fine once RLS needs
   to actually hold.
-- `/api/share`'s route contract is defined but doesn't persist yet.
 - Placeholder PWA icons (`public/icons/`) — swap before a real launch.
 - `OPENROUTER_API_KEY` and the Meta/WhatsApp Cloud API credentials aren't set
   yet in production — nothing that calls out to either will work until they
