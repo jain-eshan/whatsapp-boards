@@ -22,6 +22,5 @@ export interface AnswerResult {
 }
 
 export interface EmbedResult {
-  dense: number[]; // 1024-dim, BGE-M3 dense
-  sparse: Record<number, number>; // token-id -> weight, BGE-M3 sparse (lexical)
+  dense: number[]; // 1024-dim, BGE-M3 dense (Cloudflare Workers AI, @cf/baai/bge-m3)
 }

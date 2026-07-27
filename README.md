@@ -114,16 +114,31 @@ model doing everything:
 |---|---|---|
 | Router + field extraction (every message) | Qwen3.6-35B-A3B | MoE, ~3B active params — fast and cheap on the hot path. Strong open-weight multilingual, which Hinglish needs. Extraction, not reasoning. |
 | Query answering (low volume) | Kimi K2.5 | Strong on multilingual long-context retrieval. Low volume means cost doesn't matter here; accuracy does. |
-| Embeddings | BGE-M3 | Dense + sparse from one pass, 100+ languages. Replaces a separate full-text search pipeline outright — Postgres's `tsvector` with the English config does poorly on Hindi written in Latin script, which is most of how this gets typed. |
+| Embeddings (dense) | BGE-M3, hosted on Cloudflare Workers AI | 100+ languages, no server to run. `$0.012`/M tokens — negligible at pilot scale. |
 
-All routed through OpenRouter, model IDs in env vars, behind one interface
-(`src/lib/llm.ts`). Swapping models is a config change. **Don't take the table
-above on faith** — the repo includes the eval harness this was decided with:
-label 100 real messages from your own WhatsApp history, run each candidate
-against them, and measure routing accuracy, field accuracy, and p95 latency.
-Open weights were chosen for self-hostability and data residency, not because
-they're meaningfully cheaper at pilot scale — at 20 users the price gap
-between an open MoE and a frontier model is a few dollars a month.
+Router and answering route through OpenRouter; embeddings route through
+Cloudflare Workers AI (BGE-M3 isn't served over OpenRouter's chat-completions
+API). Model IDs live in env vars behind one interface (`src/lib/llm.ts`).
+Swapping models is a config change. **Don't take the table above on faith** —
+the repo includes the eval harness this was decided with: label 100 real
+messages from your own WhatsApp history, run each candidate against them, and
+measure routing accuracy, field accuracy, and p95 latency. Open weights were
+chosen for self-hostability and data residency, not because they're
+meaningfully cheaper at pilot scale — at 20 users the price gap between an
+open MoE and a frontier model is a few dollars a month.
+
+**Why not BGE-M3's sparse output too?** The original plan was dense + sparse
+from one model pass, replacing a separate full-text pipeline outright. In
+practice, BGE-M3 sparse retrieval needs the raw `FlagEmbedding` library run a
+specific way — it isn't exposed by Cloudflare, DeepInfra, or the popular
+self-hosted inference servers (`infinity` explicitly lists "bge-m3, no
+sparse"), and self-hosting it just for this would mean running a Python/
+PyTorch service ourselves. Not worth it before search has real usage to judge
+against. Postgres's `pg_trgm` (already provisioned, see
+`0001_init.sql`/`0005_trgm_search.sql`) covers the keyword-overlap half of
+hybrid search instead — weaker than a real sparse model on cross-lingual
+matching, fine for one person's own capture history, free, zero extra infra.
+Revisit if search quality actually falls short at real usage.
 
 ## Privacy
 
@@ -208,19 +223,19 @@ database, not a 500 from a missing connection.
 What runs on top of that foundation is a stub build, not a finished product.
 Concretely unfinished:
 
-- `src/lib/llm.ts`'s `embed()` needs a real BGE-M3 endpoint (self-hosted, or a
-  provider serving `BAAI/bge-m3`).
-- `src/lib/search.ts`'s sparse-vector matching (`match_items_sparse` in
-  `supabase/migrations/0002_search_functions.sql`) is unimplemented — the
-  storage/query approach (pgvector `sparsevec` vs. an inverted index) needs to
-  be picked once this is actually being built against real data.
+- `OPENROUTER_API_KEY`, the Meta/WhatsApp Cloud API credentials, and
+  `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN` aren't set yet in
+  production — nothing that calls out to any of them will work until they
+  are. `embed()` (`src/lib/llm.ts`) and `hybridSearch()` (`src/lib/search.ts`)
+  are both real code now, not stubs, just missing credentials outside local
+  dev.
+- Multi-modal capture (images, PDFs) isn't wired up yet — the data model
+  isn't blocked on it (schema changes are additive), but no ingestion path
+  (WhatsApp webhook, PWA share, or web upload) handles anything but text yet.
 - Auth is a plain cookie naming a user id (`src/app/auth/verify/page.tsx`), not
   a real Supabase session — fine for a closed pilot, not fine once RLS needs
   to actually hold.
 - Placeholder PWA icons (`public/icons/`) — swap before a real launch.
-- `OPENROUTER_API_KEY` and the Meta/WhatsApp Cloud API credentials aren't set
-  yet in production — nothing that calls out to either will work until they
-  are.
 
 See `/Users/eshan/.claude/plans/glistening-stirring-torvalds.md` for the full
 design doc this implements.

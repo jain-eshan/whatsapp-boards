@@ -10,12 +10,15 @@ export interface SearchResultItem {
 
 /**
  * Hybrid retrieval for the QUERY intent: BGE-M3 dense (meaning, cross-lingual)
- * merged with BGE-M3 sparse (exact keyword) via reciprocal rank fusion.
+ * merged with Postgres pg_trgm (exact keyword/typo overlap) via reciprocal
+ * rank fusion.
  *
- * BGE-M3 replaces what would otherwise be two separate systems (pgvector +
- * a tsvector full-text pipeline) — see plan §Search: one model does the
- * whole hybrid. tsvector's English config performs poorly on Hindi written
- * in Latin script, which is most of how Hinglish gets typed.
+ * True BGE-M3 sparse retrieval needs the raw FlagEmbedding library, which
+ * isn't practically self-hostable at pilot scale — see the embed() comment
+ * in src/lib/llm.ts. pg_trgm is already provisioned (0001_init.sql) and
+ * covers the "exact keyword" half well enough for one person's own capture
+ * history; it won't out-perform a real sparse model on cross-lingual
+ * matching, but dense already carries that load.
  *
  * Aggregate questions ("what did I spend on food last month") should NOT
  * come through here — route those to aggregateQuery() below instead, so
@@ -37,18 +40,16 @@ export async function hybridSearch(
   });
   if (denseError) throw denseError;
 
-  // Sparse side: lexical overlap. Real implementation depends on how sparse
-  // vectors end up stored (sparsevec dot product, or a separate inverted
-  // index) — see the match_items_sparse() SQL function stub in
-  // supabase/migrations/0002_search_functions.sql.
-  const { data: sparseResults, error: sparseError } = await db.rpc("match_items_sparse", {
-    query_sparse: vectors.sparse,
+  // Keyword side: pg_trgm trigram similarity — see
+  // supabase/migrations/0005_trgm_search.sql.
+  const { data: trgmResults, error: trgmError } = await db.rpc("match_items_trgm", {
+    query_text: queryText,
     match_user_id: userId,
     match_count: limit * 2,
   });
-  if (sparseError) throw sparseError;
+  if (trgmError) throw trgmError;
 
-  return reciprocalRankFusion(denseResults ?? [], sparseResults ?? [], limit);
+  return reciprocalRankFusion(denseResults ?? [], trgmResults ?? [], limit);
 }
 
 function reciprocalRankFusion(

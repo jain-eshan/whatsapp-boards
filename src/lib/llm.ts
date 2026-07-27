@@ -152,26 +152,35 @@ in the same language/register the question was asked in (Hinglish is fine).`,
 }
 
 export async function embed(text: string): Promise<EmbedResult> {
-  // BGE-M3 is not served over the OpenRouter chat completions API — it needs
-  // a dedicated embeddings endpoint (self-hosted, or a provider like
-  // DeepInfra/Together that serves BAAI/bge-m3 with dense+sparse output).
-  // This stub defines the contract the rest of the app codes against; wire
-  // the real HTTP call in here once an embeddings provider is chosen.
-  const endpoint = process.env.BGE_M3_ENDPOINT;
-  if (!endpoint) {
-    throw new Error(
-      "BGE_M3_ENDPOINT not configured — embed() is a stub, see src/lib/llm.ts"
-    );
+  // BGE-M3 is not served over the OpenRouter chat completions API. Cloudflare
+  // Workers AI hosts it directly (@cf/baai/bge-m3) with no server to run —
+  // dense output only. BGE-M3's sparse output needs the raw FlagEmbedding
+  // library, which isn't practically self-hostable at pilot scale; the
+  // keyword side of hybrid search uses Postgres's pg_trgm instead, see
+  // src/lib/search.ts and supabase/migrations/0005_trgm_search.sql.
+  const accountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
+  const apiToken = requireEnv("CLOUDFLARE_API_TOKEN");
+
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/baai/bge-m3`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+    }
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Cloudflare Workers AI embed ${res.status}: ${body.slice(0, 500)}`);
   }
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input: text, return_sparse: true, return_dense: true }),
-  });
-  if (!res.ok) {
-    throw new Error(`BGE-M3 embed endpoint ${res.status}`);
-  }
   const data = await res.json();
-  return { dense: data.dense, sparse: data.sparse };
+  const dense = data?.result?.data?.[0];
+  if (!Array.isArray(dense)) {
+    throw new Error("Cloudflare Workers AI embed response missing result.data[0]");
+  }
+  return { dense };
 }
