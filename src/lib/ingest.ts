@@ -9,6 +9,21 @@ import type { CaptureFields } from "@/types/llm";
 const LOW_CONFIDENCE_THRESHOLD = 0.6;
 export const DEFAULT_BOARD_SLUG = "inbox";
 
+// Exact-match commands don't need the LLM router to recognize them — see
+// commands.ts's own doc comment. Checking these first means login/undo/
+// boards/delete-my-data all work even when OPENROUTER_API_KEY isn't set,
+// instead of dying on the router call before ever reaching runCommand().
+const FIXED_COMMANDS: Record<string, string> = {
+  login: "login",
+  undo: "undo",
+  boards: "boards",
+  "delete my data": "delete_my_data",
+};
+
+function matchFixedCommand(text: string): string | null {
+  return FIXED_COMMANDS[text.trim().toLowerCase()] ?? null;
+}
+
 /**
  * Processes one inbound WhatsApp text message end to end: idempotency check,
  * intent routing, dispatch to capture/query/command, and acknowledgment.
@@ -35,14 +50,19 @@ export async function processInboundMessage(msg: InboundTextMessage): Promise<vo
     const user = await getOrCreateUser(db, msg.from);
     const boards = await getBoards(db, user.id);
 
-    const routed = await route(msg.text.body, boards);
-
-    if (routed.intent === "command" && routed.command) {
-      await runCommand(routed.command, user, msg);
-    } else if (routed.intent === "query") {
-      await handleQuery(db, user, msg);
+    const fixedCommand = matchFixedCommand(msg.text.body);
+    if (fixedCommand) {
+      await runCommand(fixedCommand, user, msg);
     } else {
-      await handleCapture(db, user, boards, msg, routed);
+      const routed = await route(msg.text.body, boards);
+
+      if (routed.intent === "command" && routed.command) {
+        await runCommand(routed.command, user, msg);
+      } else if (routed.intent === "query") {
+        await handleQuery(db, user, msg);
+      } else {
+        await handleCapture(db, user, boards, msg, routed);
+      }
     }
 
     await db
