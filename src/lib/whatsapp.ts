@@ -76,7 +76,7 @@ export async function sendText(toE164: string, body: string): Promise<void> {
 }
 
 function requireEnv(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
 }

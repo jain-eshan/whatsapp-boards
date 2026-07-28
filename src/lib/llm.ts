@@ -15,9 +15,16 @@ import type { AnswerResult, CaptureFields, EmbedResult, RouteResult } from "@/ty
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 function requireEnv(name: string): string {
-  const value = process.env[name];
+  const value = process.env[name]?.trim();
   if (!value) throw new Error(`Missing required env var: ${name}`);
   return value;
+}
+
+// Trims env-sourced model IDs before use — a trailing newline from a
+// copy-paste into Vercel's dashboard is otherwise sent straight to
+// OpenRouter's API and rejected as "not a valid model ID".
+function envOrDefault(name: string, fallback: string): string {
+  return process.env[name]?.trim() || fallback;
 }
 
 async function openrouterChat(params: {
@@ -84,7 +91,7 @@ export async function route(
   messageText: string,
   existingBoards: { slug: string; name: string }[]
 ): Promise<RouteResult> {
-  const model = process.env.LLM_ROUTER_MODEL || "qwen/qwen3.6-35b-a3b";
+  const model = envOrDefault("LLM_ROUTER_MODEL", "qwen/qwen3.6-35b-a3b");
   const boardList = existingBoards.map((b) => `${b.slug} (${b.name})`).join(", ") || "none yet";
 
   const raw = await openrouterChat({
@@ -118,7 +125,7 @@ export async function answer(
   question: string,
   retrievedItems: { id: string; title: string | null; raw_text: string; created_at: string }[]
 ): Promise<AnswerResult> {
-  const model = process.env.LLM_ANSWER_MODEL || "moonshotai/kimi-k2.5";
+  const model = envOrDefault("LLM_ANSWER_MODEL", "moonshotai/kimi-k2.5");
 
   const context = retrievedItems
     .map((item, i) => `[${i + 1}] (id: ${item.id}) ${item.title ?? item.raw_text} — ${item.created_at}`)
